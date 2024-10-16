@@ -1,0 +1,75 @@
+import smbus
+import time
+import requests
+from datetime import datetime
+import RPi.GPIO as GPIO
+from smbus2 import SMBus
+from flask import Flask
+from mailgun import send_mailgun_email
+
+# Initialize Flask app for controlling alerts
+app = Flask(__name__)
+
+# MPU6050 sensor setup
+MPU6050_ADDRESS = 0x68
+P_THRESHOLD = 4.5  # Earthquake threshold
+
+# Initialize the MPU6050 sensor
+def initialize_mpu6050():
+    bus.write_byte_data(MPU6050_ADDRESS, 0x6B, 0)  # Wake up MPU6050
+    bus.write_byte_data(MPU6050_ADDRESS, 0x1C, 0)  # Set accel range to ±2g
+
+# Function to read accelerometer data from MPU6050
+def read_accelerometer():
+    acc_x = read_word_2c(0x3B) / 16384.0
+    acc_y = read_word_2c(0x3D) / 16384.0
+    acc_z = read_word_2c(0x3F) / 16384.0
+    magnitude = (acc_x**2 + acc_y**2 + acc_z**2) ** 0.5
+    return magnitude
+
+def read_word_2c(addr):
+    high = bus.read_byte_data(MPU6050_ADDRESS, addr)
+    low = bus.read_byte_data(MPU6050_ADDRESS, addr + 1)
+    val = (high << 8) + low
+    if val >= 0x8000:
+        return -((65535 - val) + 1)
+    else:
+        return val
+
+# DS3231 Real Time Clock setup
+def get_current_time():
+    now = datetime.now()
+    return now.strftime("%Y-%m-%d %H:%M:%S")
+
+# Function to send an SMS alert
+def send_sms_alert():
+    message = f"Earthquake detected! Magnitude: {P_THRESHOLD}. Time: {get_current_time()}"
+    send_mailgun_email('Earthquake Alert', message)
+
+# Function to trigger speaker alert
+def trigger_speaker():
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(18, GPIO.OUT)
+    GPIO.output(18, GPIO.HIGH)
+    time.sleep(5)
+    GPIO.output(18, GPIO.LOW)
+    GPIO.cleanup()
+
+# Flask route for testing the alert system
+@app.route('/trigger_alert')
+def trigger_alert():
+    magnitude = read_accelerometer()
+    if magnitude > P_THRESHOLD:
+        send_sms_alert()
+        trigger_speaker()
+        return "Earthquake alert triggered!"
+    else:
+        return "No earthquake detected."
+
+if __name__ == '__main__':
+    # Initialize devices
+    bus = SMBus(1)  # MPU6050 connected via I2C bus 1
+    initialize_mpu6050()
+    
+    # Start Flask server
+    app.run(host='0.0.0.0', port=5000)
